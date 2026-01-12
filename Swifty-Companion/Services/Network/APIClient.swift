@@ -10,6 +10,7 @@ final class APIClient {
 
     private func fetchUserInternal(login: String, didRetry: Bool) async throws -> IntraUser {
         let token = try await TokenManager.shared.getValidToken()
+//        print("TOKEN USED:", token)
 
         let url = URL(string: "https://api.intra.42.fr/v2/users/\(login.urlPathEncoded)")!
         var request = URLRequest(url: url)

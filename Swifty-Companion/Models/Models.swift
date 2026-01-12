@@ -1,9 +1,10 @@
 import Foundation
 
-struct TokenResponse: Decodable {
+struct TokenResponse: Decodable, Sendable, Hashable {
     let access_token: String
     let token_type: String
     let expires_in: Int
+    let refresh_token: String?
 }
 
 struct IntraUser: Decodable, Identifiable, Hashable {

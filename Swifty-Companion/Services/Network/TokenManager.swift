@@ -5,6 +5,7 @@ actor TokenManager {
 
     private let tokenKey = "intra_access_token"
     private let expiryKey = "intra_token_expiry_date"
+    private let refreshKey = "intra_refresh_token"
 
     private init() {}
 
@@ -29,6 +30,9 @@ actor TokenManager {
             // LOG 4 : aucun token stocké
 //            print("[TokenManager] no cached token -> fetching new token")
 //        }
+        if let refreshed = try await refreshAccessTokenIfPossible() {
+            return refreshed
+        }
         return try await fetchAndStoreToken()
     }
 
@@ -36,36 +40,37 @@ actor TokenManager {
         let clientId = Secrets.clientId
         let clientSecret = Secrets.clientSecret
 
-        guard !clientId.isEmpty, !clientSecret.isEmpty else {
-            throw APIError.misconfiguredSecrets
-        }
+        guard !clientId.isEmpty, !clientSecret.isEmpty else { throw APIError.misconfiguredSecrets }
 
-        print("[TokenManager] fetching new token from /oauth/token")
-        
+        let redirectUri = Secrets.redirectUri
+        let code = try await OAuthLoginManager.shared.startLogin()
+
         var request = URLRequest(url: URL(string: "https://api.intra.42.fr/oauth/token")!)
         request.httpMethod = "POST"
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
 
         let body =
-            "grant_type=client_credentials" +
+            "grant_type=authorization_code" +
             "&client_id=\(clientId.urlEncoded)" +
-            "&client_secret=\(clientSecret.urlEncoded)"
+            "&client_secret=\(clientSecret.urlEncoded)" +
+            "&code=\(code.urlEncoded)" +
+            "&redirect_uri=\(redirectUri.urlEncoded)"
 
         request.httpBody = body.data(using: .utf8)
 
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let http = response as? HTTPURLResponse else { throw APIError.network }
-
-        guard (200...299).contains(http.statusCode) else {
-            throw APIError.http(code: http.statusCode)
-        }
+        guard (200...299).contains(http.statusCode) else { throw APIError.http(code: http.statusCode) }
 
         let decoded = try JSONDecoder().decode(TokenResponse.self, from: data)
-        print("[TokenManager] new token received. expires_in=\(decoded.expires_in)s")
         let expiryDate = Date().addingTimeInterval(TimeInterval(decoded.expires_in))
 
         await saveToken(decoded.access_token)
         await saveExpiryDate(expiryDate)
+
+        if let rt = decoded.refresh_token {
+            await saveRefreshToken(rt)
+        }
 
         return decoded.access_token
     }
@@ -93,9 +98,69 @@ actor TokenManager {
     }
     
     func invalidateToken() async {
-        print("[TokenManager]  invalidating cached token")
         await KeychainStore.shared.delete(for: tokenKey)
         await KeychainStore.shared.delete(for: expiryKey)
+        await KeychainStore.shared.delete(for: refreshKey)
+    }
+
+    private func saveRefreshToken(_ token: String) async {
+        _ = await KeychainStore.shared.set(Data(token.utf8), for: refreshKey)
+    }
+
+    private func loadRefreshToken() async -> String? {
+        guard let data = await KeychainStore.shared.get(for: refreshKey) else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
+    private func deleteRefreshToken() async {
+        await KeychainStore.shared.delete(for: refreshKey)
+    }
+
+    private func refreshAccessTokenIfPossible() async throws -> String? {
+        guard let refreshToken = await loadRefreshToken() else { return nil }
+
+        let clientId = Secrets.clientId
+        let clientSecret = Secrets.clientSecret
+        guard !clientId.isEmpty, !clientSecret.isEmpty else {
+            throw APIError.misconfiguredSecrets
+        }
+
+        var request = URLRequest(url: URL(string: "https://api.intra.42.fr/oauth/token")!)
+        request.httpMethod = "POST"
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+
+        let body =
+            "grant_type=refresh_token" +
+            "&client_id=\(clientId.urlEncoded)" +
+            "&client_secret=\(clientSecret.urlEncoded)" +
+            "&refresh_token=\(refreshToken.urlEncoded)"
+
+        request.httpBody = body.data(using: .utf8)
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw APIError.network }
+
+        // si refresh token invalid => on le supprime
+        if http.statusCode == 400 || http.statusCode == 401 {
+            await deleteRefreshToken()
+            return nil
+        }
+
+        guard (200...299).contains(http.statusCode) else {
+            throw APIError.http(code: http.statusCode)
+        }
+
+        let decoded = try JSONDecoder().decode(TokenResponse.self, from: data)
+        let expiryDate = Date().addingTimeInterval(TimeInterval(decoded.expires_in))
+
+        await saveToken(decoded.access_token)
+        await saveExpiryDate(expiryDate)
+
+        if let newRefresh = decoded.refresh_token {
+            await saveRefreshToken(newRefresh)
+        }
+
+        return decoded.access_token
     }
 }
 
