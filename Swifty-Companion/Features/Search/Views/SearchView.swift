@@ -5,6 +5,8 @@ struct SearchView: View {
     @State private var isLoading: Bool = false
     @State private var errorMessage: String?
     @State private var user: IntraUser?
+    @State private var debugMessage: String?
+    @State private var debugMessageTask: Task<Void, Never>?
 
     var body: some View {
         NavigationStack {
@@ -46,6 +48,26 @@ struct SearchView: View {
                 }
 
                 Spacer()
+
+                // DEBUG : bouton de test, voir TokenDebugService.swift
+                Button("Delete saved token (debug)") {
+                    // Annule le timer précédent pour que les 5 secondes repartent de zéro
+                    debugMessageTask?.cancel()
+                    debugMessageTask = Task {
+                        await TokenDebugService.deleteSavedToken()
+                        debugMessage = "Token deleted."
+                        try? await Task.sleep(for: .seconds(5))
+                        if !Task.isCancelled { debugMessage = nil }
+                    }
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+                if let debugMessage {
+                    Text(debugMessage)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
             }
             .padding()
             .navigationDestination(item: $user) { u in

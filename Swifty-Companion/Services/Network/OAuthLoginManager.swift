@@ -48,7 +48,8 @@ final class OAuthLoginManager: NSObject {
             }
 
             session?.presentationContextProvider = self
-            session?.prefersEphemeralWebBrowserSession = false
+            // DEBUG : true une seule fois après « Delete saved token », false sinon (voir TokenDebugService)
+            session?.prefersEphemeralWebBrowserSession = TokenDebugService.consumeFreshLoginRequest()
             session?.start()
         }
     }
